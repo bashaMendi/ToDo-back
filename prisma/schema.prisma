@@ -1,0 +1,100 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  email        String   @unique
+  name         String
+  passwordHash String?
+  provider     String   // "credentials" | "google"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  createdTasks    Task[]  @relation("CreatedBy")
+  updatedTasks    Task[]  @relation("UpdatedBy")
+  starredTasks    TaskStar[]
+  taskAudits      TaskAudit[]
+
+  @@map("users")
+}
+
+model Task {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  description String?
+  createdBy   String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedBy   String?  @db.ObjectId
+  updatedAt   DateTime @updatedAt
+  assignees   String[] @db.ObjectId
+  version     Int      @default(1)
+  isDeleted   Boolean  @default(false) // soft delete - much simpler than deletedAt
+
+  // Relations
+  creator     User        @relation("CreatedBy", fields: [createdBy], references: [id])
+  updater     User?       @relation("UpdatedBy", fields: [updatedBy], references: [id])
+  stars       TaskStar[]
+  audits      TaskAudit[]
+
+  // Indexes for search optimization
+  @@index([isDeleted])
+  @@index([createdAt(sort: Desc)])
+  @@index([updatedAt(sort: Desc)])
+  @@index([createdBy])
+  @@index([assignees])
+  @@index([title, description]) // Text search index
+  @@index([isDeleted, createdAt(sort: Desc)]) // Compound index for common queries
+  @@index([isDeleted, updatedAt(sort: Desc)]) // Compound index for common queries
+  @@map("tasks")
+}
+
+model TaskStar {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  createdAt DateTime @default(now())
+
+  // Relations
+  task      Task     @relation(fields: [taskId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([taskId, userId])
+  @@map("taskStars")
+}
+
+model TaskAudit {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId    String   @db.ObjectId
+  at        DateTime @default(now())
+  by        String   @db.ObjectId
+  action    String   // 'create' | 'update' | 'delete' | 'duplicate'
+  diff      Json     // JSON-Patch or before/after
+  metadata  Json?    // additional context
+
+  // Relations
+  task      Task     @relation(fields: [taskId], references: [id])
+  user      User     @relation(fields: [by], references: [id])
+
+  @@map("taskAudits")
+}
+
+model PasswordReset {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  used      Boolean  @default(false)
+
+  @@map("passwordResets")
+}
