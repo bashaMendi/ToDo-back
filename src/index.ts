@@ -276,21 +276,143 @@ app.use('/tasks', starRoutes); // Stars are nested under tasks
 app.use('/me', meRoutes);
 
 // Sync endpoint for WebSocket reconnection
-app.get('/sync', (req, res) => {
-  const since = req.query.since as string;
-  if (since) {
-    // Return tasks updated since the given timestamp
+app.get('/sync', async (req, res) => {
+  try {
+    const since = req.query.since as string;
+    
+    if (!since) {
+      return res.status(400).json({
+        error: {
+          code: 400,
+          message: 'Missing since parameter',
+          requestId: req.headers['x-request-id'] as string || 'unknown',
+        },
+      });
+    }
+
+    // Validate timestamp format
+    const sinceDate = new Date(since);
+    if (isNaN(sinceDate.getTime())) {
+      return res.status(400).json({
+        error: {
+          code: 400,
+          message: 'Invalid timestamp format. Use ISO 8601 format (e.g., 2023-12-01T10:00:00.000Z)',
+          requestId: req.headers['x-request-id'] as string || 'unknown',
+        },
+      });
+    }
+
+    // Get tasks updated since the given timestamp
+    const updatedTasks = await prisma.task.findMany({
+      where: {
+        updatedAt: {
+          gt: sinceDate
+        },
+        isDeleted: false
+      },
+      include: {
+        creator: {
+          select: { id: true, name: true, email: true },
+        },
+        updater: {
+          select: { id: true, name: true, email: true },
+        },
+        stars: {
+          select: { id: true, userId: true },
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc'
+      },
+      take: 100 // Limit to prevent large responses
+    });
+
+    // Get deleted tasks since the timestamp (for soft deletes)
+    const deletedTasks = await prisma.task.findMany({
+      where: {
+        updatedAt: {
+          gt: sinceDate
+        },
+        isDeleted: true
+      },
+      select: {
+        id: true,
+        updatedAt: true,
+        version: true
+      },
+      orderBy: {
+        updatedAt: 'desc'
+      },
+      take: 50 // Limit deleted tasks
+    });
+
+    // Transform tasks to match API format
+    const transformedTasks = await Promise.all(updatedTasks.map(async (task) => {
+      const assigneeUsers = task.assignees.length
+        ? await prisma.user.findMany({
+            where: { id: { in: task.assignees } },
+            select: { id: true, name: true, email: true, createdAt: true, provider: true },
+          })
+        : [] as any[];
+
+      return {
+        id: task.id,
+        title: task.title,
+        description: task.description || '',
+        createdBy: {
+          id: task.creator.id,
+          name: task.creator.name,
+          email: task.creator.email,
+          provider: 'credentials' as const,
+          createdAt: task.createdAt.toISOString(),
+        },
+        createdAt: task.createdAt.toISOString(),
+        updatedBy: task.updater ? {
+          id: task.updater.id,
+          name: task.updater.name,
+          email: task.updater.email,
+          provider: 'credentials' as const,
+          createdAt: task.createdAt.toISOString(),
+        } : undefined,
+        updatedAt: task.updatedAt.toISOString(),
+        assignees: assigneeUsers.map(user => ({
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          provider: (user as any).provider || 'credentials',
+          createdAt: (user as any).createdAt.toISOString(),
+        })),
+        version: task.version,
+        isStarred: task.stars.length > 0,
+      };
+    }));
+
+    // Get current timestamp for next sync
+    const currentTimestamp = new Date().toISOString();
+
     res.status(200).json({
       data: {
         since,
-        message: 'Sync endpoint - implement based on your needs',
+        currentTimestamp,
+        updatedTasks: transformedTasks,
+        deletedTasks: deletedTasks.map(task => ({
+          id: task.id,
+          deletedAt: task.updatedAt.toISOString(),
+          version: task.version
+        })),
+        summary: {
+          totalUpdated: transformedTasks.length,
+          totalDeleted: deletedTasks.length,
+          hasMore: transformedTasks.length === 100 || deletedTasks.length === 50
+        }
       },
     });
-  } else {
-    res.status(400).json({
+  } catch (error) {
+    logger.error('Sync endpoint error:', error);
+    res.status(500).json({
       error: {
-        code: 400,
-        message: 'Missing since parameter',
+        code: 500,
+        message: 'Internal server error during sync',
         requestId: req.headers['x-request-id'] as string || 'unknown',
       },
     });
