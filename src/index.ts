@@ -390,7 +390,7 @@ app.get('/sync', async (req, res) => {
     // Get current timestamp for next sync
     const currentTimestamp = new Date().toISOString();
 
-    res.status(200).json({
+    return res.status(200).json({
       data: {
         since,
         currentTimestamp,
@@ -409,7 +409,7 @@ app.get('/sync', async (req, res) => {
     });
   } catch (error) {
     logger.error('Sync endpoint error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       error: {
         code: 500,
         message: 'Internal server error during sync',
