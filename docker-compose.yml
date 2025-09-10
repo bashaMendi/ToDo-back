@@ -1,4 +1,5 @@
 version: '3.8'
+#change secret environment variables from .env file
 
 services:
   app:
